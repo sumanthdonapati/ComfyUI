@@ -5,6 +5,7 @@ from comfy.cli_args import args
 import comfy.utils
 import torch
 import sys
+import platform
 
 class VRAMState(Enum):
     DISABLED = 0    #No vram present: no need to move models to vram
@@ -119,6 +120,11 @@ def get_total_memory(dev=None, torch_total_too=False):
 total_vram = get_total_memory(get_torch_device()) / (1024 * 1024)
 total_ram = psutil.virtual_memory().total / (1024 * 1024)
 logging.info("Total VRAM {:0.0f} MB, total RAM {:0.0f} MB".format(total_vram, total_ram))
+
+try:
+    logging.info("pytorch version: {}".format(torch.version.__version__))
+except:
+    pass
 
 try:
     OOM_EXCEPTION = torch.cuda.OutOfMemoryError
@@ -624,8 +630,14 @@ def supports_dtype(device, dtype): #TODO
 def device_supports_non_blocking(device):
     if is_device_mps(device):
         return False #pytorch bug? mps doesn't support non blocking
+    return True
+
+def device_should_use_non_blocking(device):
+    if not device_supports_non_blocking(device):
+        return False
     return False
-    # return True #TODO: figure out why this causes issues
+    # return True #TODO: figure out why this causes memory issues on Nvidia and possibly others
+
 
 def cast_to_device(tensor, device, dtype, copy=False):
     device_supports_cast = False
@@ -637,7 +649,7 @@ def cast_to_device(tensor, device, dtype, copy=False):
         elif is_intel_xpu():
             device_supports_cast = True
 
-    non_blocking = device_supports_non_blocking(device)
+    non_blocking = device_should_use_non_blocking(device)
 
     if device_supports_cast:
         if copy:
@@ -679,6 +691,18 @@ def pytorch_attention_flash_attention():
         if is_nvidia(): #pytorch flash attention only works on Nvidia
             return True
     return False
+
+def force_upcast_attention_dtype():
+    upcast = args.force_upcast_attention
+    try:
+        if platform.mac_ver()[0] in ['14.5']: #black image bug on OSX Sonoma 14.5
+            upcast = True
+    except:
+        pass
+    if upcast:
+        return torch.float32
+    else:
+        return None
 
 def get_free_memory(dev=None, torch_free_too=False):
     global directml_enabled
